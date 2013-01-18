@@ -166,6 +166,8 @@ sub sanitize_identifier {
   $name;
 }
 
+our %CONST;
+
 sub capture_unroll {
   my ($from, $captures, $indent) = @_;
   join(
@@ -183,6 +185,9 @@ sub inlinify {
   $args = '()'
     if !defined $args;
   my $do = 'do { '.($extra||'');
+  if (exists $CONST{$code}) {
+    return $code;
+  }
   if ($code =~ s/^(\s*package\s+([a-zA-Z0-9:]+);)//) {
     $do .= $1;
   }
@@ -311,16 +316,43 @@ sub _context {
   };
 }
 
+sub _detect_const {
+  my ($sub) = @_;
+  return !!0
+    if ref $sub ne 'CODE';
+
+  my $proto = prototype $sub;
+  return !!0
+    if !(defined $proto && $proto eq '');
+
+  my $warn = '';
+  {
+    local *_const_check = $sub;
+    local $SIG{__WARN__} = sub { $warn .= $_[0] };
+    undef &_const_check;
+  }
+  return (index($warn, 'Constant ') == 0);
+}
+
 sub quoted_from_sub {
   my ($sub) = @_;
-  my $quoted_info = $QUOTED{$sub||''} or return undef;
-  my ($name, $code, $captures, $unquoted, $deferred)
-    = @{$quoted_info}{qw(name code captures unquoted deferred)};
-  $code = _context($quoted_info) . $code;
-  $unquoted &&= $$unquoted;
-  if (($deferred && $deferred eq $sub)
-      || ($unquoted && $unquoted eq $sub)) {
-    return [ $name, $code, $captures, $unquoted, $deferred ];
+  if (my $quoted_info = $QUOTED{$sub||''}) {
+    my ($name, $code, $captures, $unquoted, $deferred)
+      = @{$quoted_info}{qw(name code captures unquoted deferred)};
+    $code = _context($quoted_info) . $code;
+    $unquoted &&= $$unquoted;
+    if (($deferred && $deferred eq $sub)
+        || ($unquoted && $unquoted eq $sub)) {
+      return [ $name, $code, $captures, $unquoted, $deferred ];
+    }
+  }
+  elsif (_detect_const($sub)) {
+    my $value = $sub->();
+    if ('' ne ref $value) {
+      my $code = quotify($value);
+      $CONST{$code} = 1;
+      return [ undef, $code, undef, $sub ];
+    }
   }
   return undef;
 }
