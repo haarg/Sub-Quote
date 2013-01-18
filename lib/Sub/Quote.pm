@@ -10,7 +10,7 @@ use Scalar::Util qw(weaken);
 use Exporter qw(import);
 use Carp qw(croak);
 BEGIN { our @CARP_NOT = qw(Sub::Defer) }
-use B ();
+use B qw(svref_2object);
 BEGIN {
   *_HAVE_PERLSTRING = defined &B::perlstring ? sub(){1} : sub(){0};
 }
@@ -42,6 +42,8 @@ sub sanitize_identifier {
   $name;
 }
 
+our %CONST;
+
 sub capture_unroll {
   my ($from, $captures, $indent) = @_;
   join(
@@ -57,6 +59,9 @@ sub capture_unroll {
 sub inlinify {
   my ($code, $args, $extra, $local) = @_;
   my $do = 'do { '.($extra||'');
+  if ($CONST{$code}) {
+    return $code;
+  }
   if ($code =~ s/^(\s*package\s+([a-zA-Z0-9:]+);)//) {
     $do .= $1;
   }
@@ -171,14 +176,28 @@ sub _context {
 
 sub quoted_from_sub {
   my ($sub) = @_;
-  my $quoted_info = $QUOTED{$sub||''} or return undef;
-  my ($name, $code, $captures, $unquoted, $deferred)
-    = @{$quoted_info}{qw(name code captures unquoted deferred)};
-  $code = _context($quoted_info) . $code;
-  $unquoted &&= $$unquoted;
-  if (($deferred && $deferred eq $sub)
-      || ($unquoted && $unquoted eq $sub)) {
-    return [ $name, $code, $captures, $unquoted, $deferred ];
+  if (my $quoted_info = $QUOTED{$sub||''}) {
+    my ($name, $code, $captures, $unquoted, $deferred)
+      = @{$quoted_info}{qw(name code captures unquoted deferred)};
+    $code = _context($quoted_info) . $code;
+    my ($name, $code, $captured, $unquoted, $deferred) = @{$quoted_info};
+    $unquoted &&= $$unquoted;
+    if (($deferred && $deferred eq $sub)
+        || ($unquoted && $unquoted eq $sub)) {
+      return [ $name, $code, $captured, $unquoted, $deferred ];
+    }
+  }
+  elsif ($sub && ref $sub && ref $sub eq 'CODE') {
+    my $sv = svref_2object($sub);
+    if ($sv->CONST) {
+      my $val = ${$sv->XSUBANY->object_2svref};
+      unless (ref $val) {
+        my $code = perlstring $val;
+        my $quoted = $QUOTED{$sub} = [undef, $code, undef, $sub];
+        $CONST{$code} = 1;
+        return [ @$quoted ];
+      }
+    }
   }
   return undef;
 }
