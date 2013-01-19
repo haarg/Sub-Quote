@@ -190,9 +190,10 @@ sub quoted_from_sub {
   elsif ($sub && ref $sub && ref $sub eq 'CODE') {
     my $sv = svref_2object($sub);
     if ($sv->CONST) {
-      my $val = ${$sv->XSUBANY->object_2svref};
-      unless (ref $val) {
-        my $code = perlstring $val;
+      my $valsv = $sv->XSUBANY;
+      unless ($valsv->ROK || $valsv->isa('B::PVMG')) {
+        my $val = ${ $valsv->object_2svref };
+        my $code = $valsv->POK ? perlstring($val) : $val;
         my $quoted = $QUOTED{$sub} = [undef, $code, undef, $sub];
         $CONST{$code} = 1;
         return [ @$quoted ];
