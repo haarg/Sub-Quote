@@ -18,7 +18,7 @@ BEGIN {
 our $VERSION = '2.004000';
 $VERSION = eval $VERSION;
 
-our @EXPORT = qw(quote_sub unquote_sub quoted_from_sub qsub);
+our @EXPORT = qw(quote_sub unquote_sub quoted_from_sub qsub subq);
 our @EXPORT_OK = qw(quotify capture_unroll inlinify sanitize_identifier);
 
 our %QUOTED;
@@ -167,6 +167,70 @@ sub _context {
       ."}\n"
       ."# END quote_sub PRELUDE\n";
   };
+}
+
+my %sigil = (
+  '$' => 'SCALAR',
+  '@' => 'ARRAY',
+  '%' => 'HASH',
+);
+my $deparse;
+sub subq (&) {
+  my ($coderef) = shift;
+  require B;
+  $deparse ||= do {
+    require B::Deparse;
+    B::Deparse->new('-l');
+  };
+  my $code = $deparse->coderef2text($coderef);
+  $code =~ s/\A{//;
+  $code =~ s/}\z//;
+  if ($code !~ /\A\s+package\s+\S+;/) {
+    $code = "    package main;\n".$code;
+  }
+  my %captures;
+  my $cv = B::svref_2object($coderef);
+  my ($names, $values) = $cv->PADLIST->ARRAY;
+  my @names = $names->ARRAY;
+  for my $i (0..$#names) {
+    my $name = $names[$i];
+    next
+      unless $name->isa('B::PV');
+    next
+      unless $name->FLAGS & B::SVf_FAKE();
+    my $name_str = $name->PV;
+    if ($name->FLAGS & B::SVpad_OUR()) {
+      my ($sigil, $glob_name) = $name_str =~ /(.)(.*)/;
+      require Devel::Peek;
+      require File::Temp;
+      open my $olderr, '>&', \*STDERR;
+      my $temp = File::Temp::tempfile();
+      open *STDERR, '>&=', $temp;
+      Devel::Peek::Dump(${$name->object_2svref});
+      open *STDERR, '>&', $olderr;
+      seek $temp, 0, 0;
+      my $dump = do { local $/; <$temp> };
+      close $temp;
+      if ($dump =~ /^\s*(?:OUR|Gv)STASH = 0x[0-9a-fA-F]+\s+"([^"]+)"/m) {
+        my $stash = $1;
+        my $glob = do { no strict 'refs'; *{ "${stash}::${glob_name}" } };
+        my $ref = *$glob{ $sigil{$sigil} };
+        $captures{ $name_str } = $ref;
+      }
+    }
+    else {
+      $captures{ $name_str } = $values->ARRAYelt($i)->object_2svref;
+    }
+  }
+  my $quoted_info;
+  my $enclose = sub {
+    no warnings 'void';
+    $quoted_info;
+    goto $coderef;
+  };
+  $quoted_info = [ undef, $code, \%captures, undef, $coderef ];
+  weaken($QUOTED{$coderef} = $quoted_info);
+  return $coderef;
 }
 
 sub quoted_from_sub {
