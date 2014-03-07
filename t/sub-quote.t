@@ -119,6 +119,13 @@ like exception {
 }, qr/^sub name "0welp" is not valid!/,
   'sub names starting with numbers are not valid';
 
+my $var = 5;
+my $five = quote_sub q{
+  $var++;
+}, { '$var' => \$var };
+$five->();
+is $var, 6, 'captured variables are aliases';
+
 my $broken_quoted = quote_sub q{
   return 5<;
   Guh

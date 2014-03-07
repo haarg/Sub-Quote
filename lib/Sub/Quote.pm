@@ -80,16 +80,25 @@ sub sanitize_identifier {
   $name;
 }
 
+my $pack = 'A000';
 sub capture_unroll {
   my ($from, $captures, $indent) = @_;
-  join(
-    '',
-    map {
-      /^([\@\%\$])/
-        or croak "capture key should start with \@, \% or \$: $_";
-      (' ' x $indent).qq{my ${_} = ${1}{${from}->{${\quotify $_}}};\n};
-    } keys %$captures
-  );
+  my $out = '';
+  $indent = ' ' x $indent;
+  $pack++;
+  my $package = __PACKAGE__."::_Capture::__${pack}__";
+  $out .= $indent . "package ${package};\n";
+  for my $capture (keys %$captures) {
+    my ($var) = $capture =~ /^[\@\%\$](.*)/
+      or croak "capture key should start with \@, \% or \$: $capture";
+    my $capture_string = quotify($capture);
+    $out .= $indent
+      . qq[*${var} = ${from}->{$capture_string};\n]
+      . qq[our ${capture};\n];
+  }
+  $out .= $indent . 'package ' . __PACKAGE__ . ";\n";
+  $out .= 'delete $' . __PACKAGE__ . "::_Capture::{'__${pack}__::'};\n";
+  $out;
 }
 
 sub inlinify {
