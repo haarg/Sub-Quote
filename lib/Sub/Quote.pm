@@ -1,6 +1,9 @@
 package Sub::Quote;
 
-sub _clean_eval { eval $_[0] }
+sub _clean_eval {
+  package Sub::Quote::_Capture;
+  eval $_[0];
+}
 
 use strict;
 use warnings;
@@ -92,13 +95,13 @@ sub capture_unroll {
     my ($var) = $capture =~ /^[\@\%\$](.*)/
       or croak "capture key should start with \@, \% or \$: $capture";
     my $capture_string = quotify($capture);
-    $out .= $indent
-      . qq[*${var} = ${from}->{$capture_string};\n]
-      . qq[our ${capture};\n];
+    $out
+      .= $indent . qq[*${var} = ${from}->{$capture_string};\n]
+      . $indent . qq[our ${capture};\n];
   }
-  $out .= $indent . 'package ' . __PACKAGE__ . ";\n";
-  $out .= 'delete $' . __PACKAGE__ . "::_Capture::{'__${pack}__::'};\n";
-  $out;
+  $out
+    . $indent . "package Sub::Quote::_Capture;\n"
+    . $indent . "delete \$Sub::Quote::_Capture::{'__${pack}__::'};\n";
 }
 
 sub inlinify {
