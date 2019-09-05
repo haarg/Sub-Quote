@@ -7,13 +7,23 @@ $VERSION =~ tr/_//d;
 
 use Exporter ();
 BEGIN { *import = \&Exporter::import }
-use Scalar::Util qw(weaken);
+use Scalar::Util qw(weaken refaddr);
 use Carp qw(croak);
 
 our @EXPORT = qw(defer_sub undefer_sub undefer_all);
 our @EXPORT_OK = qw(undefer_package defer_info);
 
 sub _getglob { no strict 'refs'; \*{$_[0]} }
+sub _refaddr {
+  my $ref = shift;
+  return undef
+    if !defined $ref;
+  return Scalar::Util::refaddr($ref)
+    || ($ref =~ /(?:^|=)[A-Z]+\(0x([0-9a-zA-Z]+)\)\z/ ? do {
+      no warnings 'portable';
+      hex "$1";
+    } : undef);
+}
 
 BEGIN {
   my $no_subname;
@@ -72,7 +82,7 @@ our %DEFERRED;
 
 sub undefer_sub {
   my ($deferred) = @_;
-  my $info = $DEFERRED{$deferred} or return $deferred;
+  my $info = $DEFERRED{_refaddr($deferred)||''} or return $deferred;
   my ($target, $maker, $options, $undeferred_ref, $deferred_sub) = @$info;
 
   if (!(
@@ -95,37 +105,38 @@ sub undefer_sub {
     *{_getglob($target)} = $made;
   }
   my $undefer_info = [ $target, $maker, $options, $undeferred_ref ];
-  $info->[5] = $DEFERRED{$made} = $undefer_info;
+  $info->[5] = $DEFERRED{refaddr($made)} = $undefer_info;
   weaken ${$undefer_info->[3]};
 
   return $made;
 }
 
 sub undefer_all {
-  undefer_sub($_) for keys %DEFERRED;
+  undefer_sub($_) for
+    map defined && defined $_->[4] ? $_->[4] : (),
+    values %DEFERRED;
   return;
 }
 
 sub undefer_package {
   my $package = shift;
-  undefer_sub($_)
-    for grep {
-      my $name = $DEFERRED{$_} && $DEFERRED{$_}[0];
-      $name && $name =~ /^${package}::[^:]+$/
-    } keys %DEFERRED;
+  undefer_sub($_) for
+    map defined $_->[4] ? $_->[4] : (),
+    grep defined && $_->[0] && $_->[0] =~ /\A${package}::[^:]+\z/,
+    values %DEFERRED;
   return;
 }
 
 sub defer_info {
   my ($deferred) = @_;
-  my $info = $DEFERRED{$deferred||''} or return undef;
+  my $info = $DEFERRED{_refaddr($deferred)||''} or return undef;
 
   my ($target, $maker, $options, $undeferred_ref, $deferred_sub) = @$info;
   if (!(
     $deferred_sub && $deferred eq $deferred_sub
     || ${$undeferred_ref} && $deferred eq ${$undeferred_ref}
   )) {
-    delete $DEFERRED{$deferred};
+    delete $DEFERRED{_refaddr($deferred)};
     return undef;
   }
   [
@@ -182,18 +193,20 @@ sub defer_sub {
       if $target;
   }
   weaken($deferred_info->[4] = $deferred);
-  weaken($DEFERRED{$deferred} = $deferred_info);
+  weaken($DEFERRED{refaddr($deferred)} = $deferred_info);
   return $deferred;
 }
 
 sub CLONE {
-  %DEFERRED = map {
+  my @deferred = map {
     defined $_ ? (
-        $_->[4] ? ($_->[4] => $_)
-      : ($_->[3] && ${$_->[3]}) ? (${$_->[3]} => $_)
+        $_->[4] ? (refaddr($_->[4]) => $_)
+      : ($_->[3] && ${$_->[3]}) ? (refaddr(${$_->[3]}) => $_)
       : ()
     ) : ()
   } values %DEFERRED;
+  %DEFERRED = @deferred;
+  weaken($_) for grep defined $_->[4], values %DEFERRED;
 }
 
 1;
